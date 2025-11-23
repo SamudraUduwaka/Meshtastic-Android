@@ -393,8 +393,7 @@ internal fun MessageScreen(
                 ourNode = ourNode,
             )
             MessageInput(
-//                isEnabled = isConnected,
-                isEnabled = true, //hard code for testing
+                isEnabled = isConnected,
                 textFieldState = messageInputState,
                 onSendMessage = {
                     val messageText = messageInputState.text.toString().trim()
