@@ -85,7 +85,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.res.pluralStringResource
+//import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -132,6 +132,14 @@ import org.meshtastic.core.ui.component.smartScrollToIndex
 import org.meshtastic.core.ui.theme.AppTheme
 import org.meshtastic.proto.AppOnlyProtos
 import java.nio.charset.StandardCharsets
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 private const val MESSAGE_CHARACTER_LIMIT_BYTES = 200
 private const val SNIPPET_CHARACTER_LIMIT = 50
@@ -161,7 +169,46 @@ fun MessageScreen(
     val coroutineScope = rememberCoroutineScope()
     val clipboardManager = LocalClipboard.current
 
+    val context = LocalContext.current
+
+    var isRecording by rememberSaveable { mutableStateOf(false) }
+
     val nodes by viewModel.nodeList.collectAsStateWithLifecycle()
+
+    // --- Voice recording helpers ---
+
+    fun startRecording() {
+        isRecording = true
+        viewModel.startVoiceRecording(
+            contactKey = contactKey,
+            onResult = { transcript ->
+                isRecording = false
+                if (!transcript.isNullOrBlank()) {
+                    val encoded = encodeVoiceText(transcript)
+                    // Send voice message directly; no need to go through onEvent
+                    viewModel.sendMessage(encoded, contactKey, replyId = null)
+                }
+            },
+            onError = {
+                isRecording = false
+            },
+        )
+    }
+
+    // Permission launcher for RECORD_AUDIO
+    val recordAudioPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestPermission(),
+        ) { granted ->
+            if (granted) {
+                // user just granted permission -> start recording
+                startRecording()
+            } else {
+                // permission denied
+                isRecording = false
+            }
+        }
+
     val ourNode by viewModel.ourNodeInfo.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
@@ -416,10 +463,32 @@ fun MessageScreen(
             MessageInput(
                 isEnabled = connectionState.isConnected(),
                 textFieldState = messageInputState,
+                isRecording = isRecording,
+                onMicPressed = {
+                    if (isRecording) {
+                        // Second tap: stop listening
+                        isRecording = false
+                        viewModel.stopVoiceRecordingAndTranscribe()
+                    } else {
+                        // First tap: check permission then start
+                        val hasPermission =
+                            ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+
+                        if (hasPermission) {
+                            startRecording()
+                        } else {
+                            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }
+                },
+
                 onSendMessage = {
-                    val messageText = messageInputState.text.toString().trim()
-                    if (messageText.isNotEmpty()) {
-                        onEvent(MessageScreenEvent.SendMessage(messageText, replyingToPacketId))
+                    val msg = messageInputState.text.toString().trim()
+                    if (msg.isNotEmpty()) {
+                        onEvent(MessageScreenEvent.SendMessage(msg, replyingToPacketId))
                     }
                 },
             )
@@ -823,7 +892,9 @@ private fun MessageInput(
     modifier: Modifier = Modifier,
     maxByteSize: Int = MESSAGE_CHARACTER_LIMIT_BYTES,
     onSendMessage: () -> Unit,
-) {
+    isRecording: Boolean = false,
+    onMicPressed: () -> Unit = {},
+    ) {
     val currentText = textFieldState.text.toString()
     val currentByteLength =
         remember(currentText) {
@@ -865,11 +936,26 @@ private fun MessageInput(
         // If strict real-time byte trimming is required, it needs careful handling of
         // cursor position and multi-byte characters, likely outside simple inputTransformation.
         trailingIcon = {
-            IconButton(onClick = { if (canSend) onSendMessage() }, enabled = canSend) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Default.Send,
-                    contentDescription = stringResource(Res.string.send),
-                )
+            val hasText = currentText.isNotEmpty()
+
+            when {
+                hasText -> {
+                    IconButton(onClick = { if (canSend) onSendMessage() }, enabled = canSend) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = stringResource(Res.string.send),
+                        )
+                    }
+                }
+
+                else -> {
+                    IconButton(onClick = onMicPressed, enabled = isEnabled) {
+                        Icon(
+                            imageVector = if (isRecording) Icons.Default.MicOff else Icons.Default.Mic,
+                            contentDescription = if (isRecording) "Stop recording" else "Start recording",
+                        )
+                    }
+                }
             }
         },
     )

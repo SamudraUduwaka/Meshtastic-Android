@@ -41,6 +41,8 @@ dependencies {
     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     implementation(libs.timber)
 
+    implementation("androidx.activity:activity-compose:1.8.0")
+
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

@@ -43,6 +43,8 @@
     <!-- API 33+ Notification runtime permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- Permissions required for providing location (from phone GPS) to mesh -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

@@ -49,6 +49,14 @@ import org.meshtastic.proto.sharedContact
 import timber.log.Timber
 import javax.inject.Inject
 
+import android.content.Intent
+import android.content.Context
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import dagger.hilt.android.qualifiers.ApplicationContext
+
 private const val VERIFIED_CONTACT_FIRMWARE_CUTOFF = "2.7.12"
 
 @HiltViewModel
@@ -62,6 +70,7 @@ constructor(
     private val packetRepository: PacketRepository,
     private val uiPrefs: UiPrefs,
     private val meshServiceNotifications: MeshServiceNotifications,
+    @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
     private val _title = MutableStateFlow("")
     val title: StateFlow<String> = _title.asStateFlow()
@@ -201,5 +210,88 @@ constructor(
         } catch (ex: RemoteException) {
             Timber.e("Send DataPacket error: ${ex.message}")
         }
+    }
+    // ---------- VOICE RECOGNITION ----------
+
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var speechResultCallback: ((String?) -> Unit)? = null
+    private var speechErrorCallback: (() -> Unit)? = null
+
+    fun startVoiceRecording(
+        contactKey: String, // kept for symmetry; not used
+        onResult: (String?) -> Unit,
+        onError: () -> Unit,
+    ) {
+        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
+            Timber.w("Speech recognition not available")
+            onError()
+            return
+        }
+
+        // store callbacks so listener can use them
+        speechResultCallback = onResult
+        speechErrorCallback = onError
+
+        if (speechRecognizer == null) {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(appContext).apply {
+                setRecognitionListener(object : RecognitionListener {
+
+                    override fun onResults(results: Bundle) {
+                        val text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                        Timber.d("Speech result: $text")
+                        speechResultCallback?.invoke(text)
+                    }
+
+                    override fun onError(error: Int) {
+                        Timber.w("Speech recognizer error: $error")
+                        speechErrorCallback?.invoke()
+                    }
+
+                    override fun onRmsChanged(rmsdB: Float) {}
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+
+                    override fun onReadyForSpeech(params: Bundle?) {
+                        Timber.d("Speech: ready for speech")
+                    }
+
+                    override fun onBeginningOfSpeech() {
+                        Timber.d("Speech: beginning of speech")
+                    }
+
+                    override fun onEndOfSpeech() {
+                        Timber.d("Speech: end of speech")
+                    }
+
+                    override fun onPartialResults(partialResults: Bundle?) {
+                        Timber.d("Speech: partial results received")
+                    }
+
+                })
+            }
+        }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
+        }
+
+        // start listening as soon as user taps mic
+        speechRecognizer?.startListening(intent)
+    }
+
+    fun stopVoiceRecordingAndTranscribe() {
+        // stopping will trigger onResults / onError using the callbacks set above
+        speechRecognizer?.stopListening()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
     }
 }
