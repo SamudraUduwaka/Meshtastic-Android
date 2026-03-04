@@ -182,16 +182,16 @@ androidComponents {
             variant.applicationId = "com.geeksville.mesh.google.debug"
         }
     }
-    onVariants(selector().withBuildType("release")) { variant ->
-        if (variant.flavorName == "google") {
-            val variantNameCapped = variant.name.replaceFirstChar { it.uppercase() }
-            val minifyTaskName = "minify${variantNameCapped}WithR8"
-            val uploadTaskName = "uploadMapping$variantNameCapped"
-            if (project.tasks.findByName(uploadTaskName) != null && project.tasks.findByName(minifyTaskName) != null) {
-                tasks.named(minifyTaskName).configure { finalizedBy(uploadTaskName) }
-            }
-        }
-    }
+//    onVariants(selector().withBuildType("release")) { variant ->
+//        if (variant.flavorName == "google") {
+//            val variantNameCapped = variant.name.replaceFirstChar { it.uppercase() }
+//            val minifyTaskName = "minify${variantNameCapped}WithR8"
+//            val uploadTaskName = "uploadMapping$variantNameCapped"
+//            if (project.tasks.findByName(uploadTaskName) != null && project.tasks.findByName(minifyTaskName) != null) {
+//                tasks.named(minifyTaskName).configure { finalizedBy(uploadTaskName) }
+//            }
+//        }
+//    }
 }
 
 project.afterEvaluate { logger.lifecycle("Version code is set to: ${android.defaultConfig.versionCode}") }
@@ -270,6 +270,12 @@ tasks.configureEach {
         googleServiceKeywords.any { name.contains(it, ignoreCase = true) } && name.contains("fdroid", ignoreCase = true)
     ) {
         project.logger.lifecycle("Disabling task for F-Droid: $name")
+        enabled = false
+    }
+
+    // Hard-disable Crashlytics mapping upload tasks (googleRelease was failing here)
+    if (name.startsWith("uploadCrashlyticsMappingFile")) {
+        project.logger.lifecycle("Disabling Crashlytics mapping upload task: $name")
         enabled = false
     }
 }

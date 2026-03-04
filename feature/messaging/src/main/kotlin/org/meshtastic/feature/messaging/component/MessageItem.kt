@@ -65,6 +65,8 @@ import org.meshtastic.core.ui.component.Snr
 import org.meshtastic.core.ui.component.preview.NodePreviewParameterProvider
 import org.meshtastic.core.ui.theme.AppTheme
 import org.meshtastic.core.ui.theme.MessageItemColors
+import org.meshtastic.feature.messaging.decodeVoiceText
+import org.meshtastic.feature.messaging.VoiceMessageBubble
 
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -89,6 +91,10 @@ internal fun MessageItem(
         .fillMaxWidth()
         .background(color = if (selected) Color.Gray else MaterialTheme.colorScheme.background),
 ) {
+    val decoded = decodeVoiceText(message.text)
+    val isVoice = decoded.isVoice
+    val visibleText = decoded.visibleText
+
     val containsBel = message.text.contains('\u0007')
     val containerColor =
         Color(
@@ -162,12 +168,20 @@ internal fun MessageItem(
                 }
 
                 Column(modifier = Modifier.padding(horizontal = 8.dp)) {
-                    AutoLinkText(
-                        modifier = Modifier.fillMaxWidth(),
-                        text = message.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = cardColors.contentColor,
-                    )
+
+                    if (isVoice) {
+                        VoiceMessageBubble(
+                            raw = message.text,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        AutoLinkText(
+                            modifier = Modifier.fillMaxWidth(),
+                            text = visibleText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = cardColors.contentColor,
+                        )
+                    }
 
                     val topPadding = if (!message.fromLocal) 2.dp else 0.dp
                     Row(

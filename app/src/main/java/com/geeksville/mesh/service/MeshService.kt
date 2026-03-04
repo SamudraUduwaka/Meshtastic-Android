@@ -131,6 +131,9 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlin.math.absoluteValue
 
+import com.geeksville.mesh.inference.RuleInference
+import kotlinx.coroutines.withTimeoutOrNull
+
 /**
  * Handles all the communication with android apps. Also keeps an internal model of the network state.
  *
@@ -302,6 +305,57 @@ class MeshService : Service() {
         val name = nodeDBbyID[packet?.from]?.user?.longName
         return name ?: getString(Res.string.unknown_username)
     }
+
+    //for alerting
+    private fun computeContactKey(dataPacket: DataPacket): String {
+        val fromLocal = dataPacket.from == DataPacket.ID_LOCAL
+        val toBroadcast = dataPacket.to == DataPacket.ID_BROADCAST
+        val contactId = if (fromLocal || toBroadcast) dataPacket.to else dataPacket.from
+        return "${dataPacket.channel}$contactId"
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun getGpsOnce(timeoutMs: Long = 1500L): RuleInference.Gps? {
+        if (!hasLocationPermission()) return null
+
+        val loc = withTimeoutOrNull(timeoutMs) {
+            locationRepository.getLocations().first()
+        } ?: return null
+
+        return RuleInference.Gps(
+            lat = loc.latitude,
+            lon = loc.longitude
+        )
+    }
+
+    private suspend fun maybeShowInferenceAlert(fromUs: Boolean, dataPacket: DataPacket) {
+        if (fromUs) return // sender never gets alerts for own outgoing messages
+
+        if (dataPacket.dataType != Portnums.PortNum.TEXT_MESSAGE_APP_VALUE) return
+
+        val text = dataPacket.bytes?.decodeToString()?.trim().orEmpty()
+        if (text.isBlank()) return
+
+        val gps = getGpsOnce(timeoutMs = 1500L)  // returns RuleInference.Gps?
+        val res = RuleInference.extract(text, gps = gps)
+//        val res = RuleInference.extract(text, gps = null)
+
+        val critical = (res.sitrep.urgency == "HIGH" && res.sitrep.confidence >= 0.55) ||
+                (res.sitrep.confidence >= 0.70)
+
+        if (!critical) return
+
+        val contactKey = computeContactKey(dataPacket)
+
+        // simplest: reuse existing alert notification UI
+        serviceNotifications.showAlertNotification(
+            contactKey,
+            getSenderName(dataPacket),
+            res.alertText
+        )
+
+    }
+    // for alerting
 
     /** start our location requests (if they weren't already running) */
     private fun startLocationRequests() {
@@ -825,6 +879,11 @@ class MeshService : Service() {
                         } else {
                             Timber.d("Received CLEAR_TEXT from $fromId")
                             rememberDataPacket(dataPacket)
+                            // Receiver-side inference alert (ONLY for received messages)
+                            Timber.e("INFER_STEP: reached CLEAR_TEXT branch. text=${dataPacket.text}")
+                            serviceScope.handledLaunch {
+                                maybeShowInferenceAlert(fromUs, dataPacket)
+                            }
                         }
                     }
 

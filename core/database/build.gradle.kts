@@ -34,6 +34,7 @@ dependencies {
     implementation(projects.core.model)
     implementation(projects.core.proto)
     implementation(projects.core.strings)
+    testImplementation("junit:junit:4.13.2")
 
     implementation(libs.androidx.room.paging)
     implementation(libs.kotlinx.serialization.json)
