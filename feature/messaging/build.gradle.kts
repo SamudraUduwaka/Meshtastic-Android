@@ -34,6 +34,7 @@ dependencies {
     implementation(projects.core.strings)
     implementation(projects.core.ui)
 
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.compose.material.iconsExtended)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.text)
@@ -41,8 +42,9 @@ dependencies {
     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     implementation(libs.androidx.paging.compose)
     implementation(libs.timber)
+    implementation(libs.moonshine.voice)
 
-    implementation("androidx.activity:activity-compose:1.8.0")
+    implementation(libs.androidx.activity.compose)
 
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
