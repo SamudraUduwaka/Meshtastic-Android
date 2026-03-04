@@ -45,3 +45,5 @@ keystore.properties
 # Personal build scripts
 build-and-install-android.sh
 wireless-install.sh
+/gradle/gradle-daemon-jvm.properties
+/key

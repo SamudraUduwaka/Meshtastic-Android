@@ -17,12 +17,16 @@
 
 package org.meshtastic.feature.messaging
 
+import android.content.Context
 import android.os.RemoteException
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +36,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.meshtastic.core.data.repository.NodeRepository
 import org.meshtastic.core.data.repository.PacketRepository
 import org.meshtastic.core.data.repository.QuickChatActionRepository
@@ -51,14 +56,12 @@ import org.meshtastic.proto.channelSet
 import org.meshtastic.proto.sharedContact
 import timber.log.Timber
 import javax.inject.Inject
+import java.util.concurrent.atomic.AtomicReference
 
-import android.content.Intent
-import android.content.Context
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import dagger.hilt.android.qualifiers.ApplicationContext
+import ai.moonshine.voice.MicTranscriber
+import ai.moonshine.voice.TranscriptEvent
+import ai.moonshine.voice.TranscriptEventListener
+import ai.moonshine.voice.JNI
 
 private const val VERIFIED_CONTACT_FIRMWARE_CUTOFF = "2.7.12"
 
@@ -219,19 +222,87 @@ constructor(
             Timber.e("Send DataPacket error: ${ex.message}")
         }
     }
-    // ---------- VOICE RECOGNITION ----------
 
-    private var speechRecognizer: SpeechRecognizer? = null
+    // ---------- MOONSHINE VOICE ----------
+
+    private var transcriber: MicTranscriber? = null
     private var speechResultCallback: ((String?) -> Unit)? = null
     private var speechErrorCallback: (() -> Unit)? = null
+    private val accumulatedTranscript = java.lang.StringBuffer()
+    private val currentLine = AtomicReference("")
+
+    private val _isVoiceModelLoaded = MutableStateFlow(false)
+    val isVoiceModelLoaded: StateFlow<Boolean> = _isVoiceModelLoaded
+
+    fun initTranscriber(activity: AppCompatActivity) {
+        if (transcriber != null) {
+            Timber.d("Moonshine: transcriber already initialized")
+            return
+        }
+        Timber.d("Moonshine: initializing MicTranscriber with activity: $activity")
+        try {
+            val newTranscriber = MicTranscriber(activity)
+            transcriber = newTranscriber
+            
+            viewModelScope.launch {
+                try {
+                    Timber.d("Moonshine: starting model load")
+                    withContext(Dispatchers.IO) {
+                        newTranscriber.loadFromAssets(activity, "base-en", JNI.MOONSHINE_MODEL_ARCH_BASE)
+                    }
+                    _isVoiceModelLoaded.value = true
+                    Timber.d("Moonshine: model loaded successfully")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(appContext, "Voice model loaded", Toast.LENGTH_SHORT).show()
+                    }
+                    // Notify permission if already granted
+                    newTranscriber.onMicPermissionGranted()
+                } catch (e: Exception) {
+                    Timber.e(e, "Moonshine model load error")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(appContext, "Voice model load failed", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+
+            newTranscriber.addListener { event ->
+                event.accept(object : TranscriptEventListener() {
+                    override fun onLineStarted(e: TranscriptEvent.LineStarted) {
+                        Timber.d("Moonshine: line started")
+                    }
+                    override fun onLineTextChanged(e: TranscriptEvent.LineTextChanged) {
+                        currentLine.set(e.line.text)
+                        Timber.d("Moonshine: text changed: ${e.line.text}")
+                    }
+                    override fun onLineCompleted(e: TranscriptEvent.LineCompleted) {
+                        val text = e.line.text
+                        Timber.d("Moonshine line completed: $text")
+                        if (!text.isNullOrBlank()) {
+                            accumulatedTranscript.append(text).append(" ")
+                        }
+                        currentLine.set("")
+                    }
+                    override fun onError(e: TranscriptEvent.Error) {
+                        Timber.e("Moonshine transcription error event: $e")
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "Moonshine initialization error")
+        }
+    }
 
     fun startVoiceRecording(
-        contactKey: String, // kept for symmetry; not used
+        activity: AppCompatActivity,
+        contactKey: String,
         onResult: (String?) -> Unit,
         onError: () -> Unit,
     ) {
-        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
-            Timber.w("Speech recognition not available")
+        initTranscriber(activity)
+        
+        if (!_isVoiceModelLoaded.value) {
+            Timber.w("Moonshine: model not loaded yet")
+            Toast.makeText(appContext, "Voice model still loading...", Toast.LENGTH_SHORT).show()
             onError()
             return
         }
@@ -239,67 +310,47 @@ constructor(
         // store callbacks so listener can use them
         speechResultCallback = onResult
         speechErrorCallback = onError
+        accumulatedTranscript.setLength(0) // reset for new recording
+        currentLine.set("")
 
-        if (speechRecognizer == null) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(appContext).apply {
-                setRecognitionListener(object : RecognitionListener {
-
-                    override fun onResults(results: Bundle) {
-                        val text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                        Timber.d("Speech result: $text")
-                        speechResultCallback?.invoke(text)
-                    }
-
-                    override fun onError(error: Int) {
-                        Timber.w("Speech recognizer error: $error")
-                        speechErrorCallback?.invoke()
-                    }
-
-                    override fun onRmsChanged(rmsdB: Float) {}
-                    override fun onBufferReceived(buffer: ByteArray?) {}
-
-                    override fun onEvent(eventType: Int, params: Bundle?) {}
-
-                    override fun onReadyForSpeech(params: Bundle?) {
-                        Timber.d("Speech: ready for speech")
-                    }
-
-                    override fun onBeginningOfSpeech() {
-                        Timber.d("Speech: beginning of speech")
-                    }
-
-                    override fun onEndOfSpeech() {
-                        Timber.d("Speech: end of speech")
-                    }
-
-                    override fun onPartialResults(partialResults: Bundle?) {
-                        Timber.d("Speech: partial results received")
-                    }
-
-                })
-            }
+        try {
+            transcriber?.onMicPermissionGranted() // Important to notify transcriber
+            transcriber?.start()
+            Timber.d("Moonshine: started listening")
+        } catch (e: Exception) {
+            Timber.e(e, "Moonshine start error")
+            Toast.makeText(appContext, "Recording failed to start", Toast.LENGTH_SHORT).show()
+            onError()
         }
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-        }
-
-        // start listening as soon as user taps mic
-        speechRecognizer?.startListening(intent)
     }
 
     fun stopVoiceRecordingAndTranscribe() {
-        // stopping will trigger onResults / onError using the callbacks set above
-        speechRecognizer?.stopListening()
+        Timber.d("Moonshine: stop requested")
+        viewModelScope.launch {
+            try {
+                transcriber?.stop()
+                // Small delay to allow last buffers to process from the listener
+                kotlinx.coroutines.delay(800) 
+                val result = (accumulatedTranscript.toString() + " " + currentLine.get()).trim()
+                Timber.d("Moonshine: stopped listening. Final transcript: $result")
+                
+                withContext(Dispatchers.Main) {
+                    if (result.isBlank()) {
+                        Toast.makeText(appContext, "No speech detected", Toast.LENGTH_SHORT).show()
+                    }
+                    speechResultCallback?.invoke(result.ifBlank { null })
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Moonshine stop error")
+                withContext(Dispatchers.Main) {
+                    speechResultCallback?.invoke(null)
+                }
+            }
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
-        speechRecognizer?.destroy()
-        speechRecognizer = null
+        transcriber?.stop()
     }
 }

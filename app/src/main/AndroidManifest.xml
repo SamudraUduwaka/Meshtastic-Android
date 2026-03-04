@@ -28,6 +28,8 @@
         android:name="android.hardware.location.gps"
         android:required="false" />
 
+    <uses-sdk tools:overrideLibrary="ai.moonshine.voice" />
+
     <!-- Request legacy Bluetooth permissions on older devices -->
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />

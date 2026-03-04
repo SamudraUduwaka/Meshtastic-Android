@@ -141,6 +141,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 
 private const val MESSAGE_CHARACTER_LIMIT_BYTES = 200
 private const val SNIPPET_CHARACTER_LIMIT = 50
@@ -176,11 +177,21 @@ fun MessageScreen(
 
     val nodes by viewModel.nodeList.collectAsStateWithLifecycle()
 
+    // Trigger voice model loading as soon as we enter the screen
+    LaunchedEffect(Unit) {
+        val activity = context as? AppCompatActivity
+        if (activity != null) {
+            viewModel.initTranscriber(activity)
+        }
+    }
+
     // --- Voice recording helpers ---
 
     fun startRecording() {
+        val activity = context as? AppCompatActivity ?: return
         isRecording = true
         viewModel.startVoiceRecording(
+            activity = activity,
             contactKey = contactKey,
             onResult = { transcript ->
                 isRecording = false
@@ -224,6 +235,7 @@ fun MessageScreen(
     val selectedMessageIds = rememberSaveable { mutableStateOf(emptySet<Long>()) }
     val messageInputState = rememberTextFieldState(message)
     val showQuickChat by viewModel.showQuickChat.collectAsStateWithLifecycle()
+    val isVoiceModelLoaded by viewModel.isVoiceModelLoaded.collectAsStateWithLifecycle()
 
     // Derived state, memoized for performance
     val channelInfo =
@@ -452,6 +464,7 @@ fun MessageScreen(
                 isEnabled = connectionState.isConnected(),
                 textFieldState = messageInputState,
                 isRecording = isRecording,
+                isVoiceModelLoaded = isVoiceModelLoaded,
                 onMicPressed = {
                     if (isRecording) {
                         // Second tap: stop listening
@@ -881,6 +894,7 @@ private fun MessageInput(
     maxByteSize: Int = MESSAGE_CHARACTER_LIMIT_BYTES,
     onSendMessage: () -> Unit,
     isRecording: Boolean = false,
+    isVoiceModelLoaded: Boolean = false,
     onMicPressed: () -> Unit = {},
     ) {
     val currentText = textFieldState.text.toString()
@@ -910,7 +924,7 @@ private fun MessageInput(
                     style = MaterialTheme.typography.bodySmall,
                     color =
                     if (isOverLimit) {
-                        MaterialTheme.colorScheme.error
+                        currentText.toByteArray(StandardCharsets.UTF_8).size.let { if (it > maxByteSize) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant }
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
@@ -937,7 +951,7 @@ private fun MessageInput(
                 }
 
                 else -> {
-                    IconButton(onClick = onMicPressed, enabled = isEnabled) {
+                    IconButton(onClick = onMicPressed, enabled = isEnabled && isVoiceModelLoaded) {
                         Icon(
                             imageVector = if (isRecording) Icons.Default.MicOff else Icons.Default.Mic,
                             contentDescription = if (isRecording) "Stop recording" else "Start recording",
